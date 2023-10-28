@@ -1,105 +1,44 @@
-name: Build
+name: Create and publish a Docker image
 
 on:
   push:
-    branches: [ master ]
-    tags: [ 'v*' ]
-  pull_request:
-    branches: [ master ]
+    branches: [master]
+
+env:
+  REGISTRY: ghcr.io/nishch
 
 jobs:
-  # Build and test project
-  build:
+  build-img:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:14
-        env:
-          POSTGRES_DB: readflow_test
-          POSTGRES_PASSWORD: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    - uses: actions/setup-go@v4
-      with:
-        go-version: stable
-    - run: make build test
-      env:
-        READFLOW_DB: postgres://postgres:postgres@localhost:5432/readflow_test?sslmode=disable
 
-  # Create project release if tagged
-  release:
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    - uses: actions/setup-go@v4
-      with:
-        go-version: stable
-    - uses: actions/setup-node@v3
-      with:
-        node-version: current
-    - run: npm install -g standard-changelog
-    - run: make distribution
-    - name: get CHANGELOG
-      id: changelog
-      uses: requarks/changelog-action@v1
-      with:
-        token: ${{ github.token }}
-        tag: ${{ github.ref_name }}
-    - uses: softprops/action-gh-release@v1
-      with:
-        body: ${{ steps.changelog.outputs.changes }}
-        files: |
-          release/readflow-linux-amd64.tgz
-          release/readflow-linux-arm64.tgz
-          release/readflow-linux-arm.tgz
-          release/readflow-darwin-amd64.tgz
-          release/readflow-windows-amd64.tgz
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-  # Publish Docker image
-  publish:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    - name: extract metadata (tags, labels) for Docker
-      id: meta
-      uses: docker/metadata-action@v3
-      with:
-        images: ncarlier/readflow
-        tags: |
-          type=edge
-          type=semver,pattern={{version}}
-    - uses: docker/setup-qemu-action@v1
-      with:
-        image: tonistiigi/binfmt:latest
-        platforms: arm64,arm
-    - uses: docker/setup-buildx-action@v1 
-    - uses: docker/login-action@v1
-      if: github.event_name != 'pull_request'
-      with:
-        username: ${{ secrets.DOCKER_HUB_USERNAME }}
-        password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN  }}      
-    - uses: docker/build-push-action@v2
-      with:
-        context: .
-        platforms: linux/amd64,linux/arm64,linux/arm/v7
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/readflow
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: "."
+          platforms: linux/arm64/v8
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
